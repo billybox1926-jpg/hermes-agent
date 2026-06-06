@@ -894,6 +894,13 @@ class TurnController {
     this.toolTokenAcc = 0
     this.interrupted = false
     this.persistedToolLabels.clear()
+    // Usage-band notices (credits.usage) are "show until next prompt": a 50/75/90
+    // heads-up should flash and then yield, not camp the bar. Clear it as a new
+    // turn starts. Depletion (credits.depleted) and other notices stay — they're
+    // explicitly sticky until the policy clears them.
+    if (getUiState().notice?.key === 'credits.usage') {
+      this.clearNotice('credits.usage')
+    }
     patchUiState({ busy: true })
     patchTurnState({ activity: [], outcome: '', subagents: [], toolTokens: 0, tools: [], turnTrail: [] })
   }
