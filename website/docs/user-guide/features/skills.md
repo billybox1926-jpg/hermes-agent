@@ -10,6 +10,8 @@ Skills are on-demand knowledge documents the agent can load when needed. They fo
 
 All skills live in **`~/.hermes/skills/`** — the primary directory and source of truth. On fresh install, bundled skills are copied from the repo. Hub-installed and agent-created skills also go here. The agent can modify or delete any skill.
 
+> **Note about the Curator**: While the agent can modify any skill, the background curator normally only manages agent-created skills. However, if `prune_builtins: true` is set in `config.yaml`, the curator may modify or archive bundled and hub-installed skills during its maintenance passes. See the [Curator documentation](/user-guide/features/curator) for details.
+
 You can also point Hermes at **external skill directories** — additional folders scanned alongside the local one. See [External Skill Directories](#external-skill-directories) below.
 
 See also:
