@@ -10517,16 +10517,24 @@ class HermesCLI:
         return True
 
     def _show_usage(self):
-        """Show rate limits (if available) and session token usage."""
+        """Rate limits + session token usage (when a live agent exists) + Nous credits.
+
+        The Nous credits block is agent-independent (a portal fetch), so it runs even
+        with no live agent — important for the TUI, where /usage runs in a slash-worker
+        subprocess that resumes the session WITHOUT building an agent (self.agent is None),
+        which would otherwise early-return before any credits showed.
+        """
         if not self.agent:
-            print("(._.) No active agent -- send a message first.")
+            if not self._print_nous_credits_block():
+                print("(._.) No active agent -- send a message first.")
             return
 
         agent = self.agent
         calls = agent.session_api_calls
 
         if calls == 0:
-            print("(._.) No API calls made yet in this session.")
+            if not self._print_nous_credits_block():
+                print("(._.) No API calls made yet in this session.")
             return
 
         # ── Rate limits (shown first when available) ────────────────
@@ -10620,54 +10628,9 @@ class HermesCLI:
             for line in account_lines:
                 print(line)
 
-        # ── Nous credits magnitudes (L6) ────────────────────────────
-        # Nous-native data, rendered through the same machinery but sourced
-        # from the portal account (NOT fetch_account_usage — that path is
-        # per-provider and Nous credits live elsewhere). Magnitudes + a
-        # monthly-grant % gauge when available; a portal CTA. A point-in-time
-        # snapshot, shown only when /usage runs (not real-time).
-        #
-        # Gate on "a Nous account is logged in", NOT on the inference provider
-        # string: /usage runs in a slash-worker subprocess whose resolved
-        # provider is often not "nous" even when the user has a Nous account,
-        # so a provider=="nous" gate would hide the block. The presence check
-        # is a cheap local auth-state lookup (no network); the actual fetch
-        # only fires when a Nous credential exists.
-        _nous_present = False
-        try:
-            from hermes_cli.auth import get_provider_auth_state
-
-            _nous_state = get_provider_auth_state("nous") or {}
-            _nous_tok = _nous_state.get("access_token")
-            _nous_present = isinstance(_nous_tok, str) and bool(_nous_tok.strip())
-        except Exception:
-            _nous_present = False
-        if _nous_present:
-            try:
-                from hermes_cli.nous_account import get_nous_portal_account_info
-                from agent.account_usage import build_nous_credits_snapshot
-
-                # force_fresh hits /api/oauth/account for the live figures,
-                # bounded by a wall-clock timeout (like the per-provider fetch
-                # above) — urllib's per-socket timeout isn't a wall-clock
-                # guarantee, so a stalled portal could otherwise hang /usage.
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _pool:
-                    nous_account = _pool.submit(
-                        get_nous_portal_account_info, force_fresh=True
-                    ).result(timeout=10.0)
-                credits_snapshot = build_nous_credits_snapshot(nous_account)
-                credits_lines = [
-                    f"  {line}" for line in render_account_usage_lines(credits_snapshot)
-                ]
-                if credits_lines:
-                    print()
-                    for line in credits_lines:
-                        print(line)
-            except Exception:
-                # Fail-open: a portal hiccup or timeout must never break /usage.
-                logging.getLogger(__name__).debug(
-                    "nous credits /usage block failed", exc_info=True
-                )
+        # Nous credits magnitudes + monthly-grant gauge (agent-independent — also
+        # runs at the no-agent / no-calls early-returns above). See the helper.
+        self._print_nous_credits_block()
 
         if self.verbose:
             logging.getLogger().setLevel(logging.DEBUG)
@@ -10682,6 +10645,55 @@ class HermesCLI:
             # into stream-retry events, credential rotations, etc.
             # Console quietness is enforced by hermes_logging not
             # installing a console StreamHandler in non-verbose mode.
+
+    def _print_nous_credits_block(self) -> bool:
+        """Print the Nous credits magnitudes + monthly-grant gauge when a Nous account
+        is logged in. Agent-independent (a portal fetch), so /usage shows it even in the
+        slash-worker subprocess that resumes WITHOUT a live agent. Returns True if it
+        printed anything. Fail-open: a portal hiccup/timeout never breaks /usage.
+
+        Gate on "a Nous account is logged in" (cheap local auth-state check), NOT the
+        inference-provider string — the /usage subprocess's resolved provider is often
+        not "nous" even when the user has a Nous account, which would hide the block.
+        """
+        try:
+            from hermes_cli.auth import get_provider_auth_state
+
+            _tok = (get_provider_auth_state("nous") or {}).get("access_token")
+            if not (isinstance(_tok, str) and _tok.strip()):
+                return False
+        except Exception:
+            return False
+        try:
+            from hermes_cli.nous_account import get_nous_portal_account_info
+            from agent.account_usage import (
+                build_nous_credits_snapshot,
+                render_account_usage_lines,
+            )
+
+            # force_fresh hits /api/oauth/account for live figures; bounded by a
+            # wall-clock timeout (urllib's per-socket timeout isn't a wall-clock
+            # guarantee) so a stalled portal can't hang /usage.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _pool:
+                nous_account = _pool.submit(
+                    get_nous_portal_account_info, force_fresh=True
+                ).result(timeout=10.0)
+            credits_lines = [
+                f"  {line}"
+                for line in render_account_usage_lines(
+                    build_nous_credits_snapshot(nous_account)
+                )
+            ]
+            if credits_lines:
+                print()
+                for line in credits_lines:
+                    print(line)
+                return True
+        except Exception:
+            logging.getLogger(__name__).debug(
+                "nous credits /usage block failed", exc_info=True
+            )
+        return False
 
     def _show_insights(self, command: str = "/insights"):
         """Show usage insights and analytics from session history."""
